@@ -3,176 +3,12 @@ import pool from "../config/db.js";
 
 const router = express.Router();
 
-const AVAILABILITY_PHRASES = [
-  "do you have",
-  "do u have",
-  "do you guys have",
-  "do u guys have",
-  "have you got",
-  "got any",
-  "is there",
-  "are there",
-  "available",
-  "availability",
-  "collection",
-];
-
-function normalizeWord(word) {
-  const value = word.toLowerCase();
-
-  if (value.endsWith("ies")) {
-    return value.slice(0, -3) + "y";
-  }
-
-  if (value.endsWith("es")) {
-    return value.slice(0, -2);
-  }
-
-  if (value.endsWith("s")) {
-    return value.slice(0, -1);
-  }
-
-  return value;
-}
-
-function getSearchTerms(text = "") {
-  const stopWords = new Set([
-    "the",
-    "a",
-    "an",
-    "and",
-    "or",
-    "is",
-    "are",
-    "do",
-    "does",
-    "you",
-    "your",
-    "guys",
-    "have",
-    "has",
-    "any",
-    "some",
-    "for",
-    "to",
-    "of",
-    "in",
-    "on",
-    "at",
-    "with",
-    "me",
-    "i",
-    "we",
-    "my",
-    "our",
-    "this",
-    "that",
-    "these",
-    "those",
-    "it",
-    "its",
-    "can",
-    "could",
-    "would",
-    "should",
-    "please",
-    "tell",
-    "show",
-    "give",
-    "want",
-    "need",
-    "looking",
-    "good",
-    "great",
-    "best",
-    "suggest",
-    "recommend",
-    "available",
-    "availability",
-    "option",
-    "options",
-    "item",
-    "items",
-    "rental",
-    "rent",
-    "rentals",
-    "book",
-    "booking",
-    "price",
-    "cost",
-    "budget",
-    "day",
-    "days",
-  ]);
-
-  return text
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, " ")
-    .split(/\s+/)
-    .filter(Boolean)
-    .map(normalizeWord)
-    .filter((word) => word.length > 2)
-    .filter((word) => !stopWords.has(word));
-}
-
-function isAvailabilityQuestion(text = "") {
-  const lower = text.toLowerCase();
-
-  return AVAILABILITY_PHRASES.some((phrase) =>
-    lower.includes(phrase)
-  );
-}
-
-function findMatchingItems(items, message) {
-  const terms = getSearchTerms(message);
-
-  return items.filter((item) => {
-    const searchableText = [
-      item.title,
-      item.category,
-      item.city,
-      item.description,
-    ]
-      .filter(Boolean)
-      .join(" ")
-      .toLowerCase();
-
-    return terms.some((term) =>
-      searchableText.includes(term)
-    );
-  });
-}
-
-function formatInventory(items) {
-  return items
-    .map(
-      (item) =>
-        `#${item.id} ${item.title} | ${
-          item.category || "general"
-        } | ${item.city} | ₹${item.price_per_day}/day | ${
-          item.description || ""
-        }`
-    )
-    .join("\n");
-}
-
-router.post("/chat", async (req, res) => {
-  try {
-    const incomingMessages = Array.isArray(
-      req.body?.messages
-    )
-      ? req.body.messages
-      : [];
-
-    if (incomingMessages.length === 0) {
-      return res.status(400).json({
-        message: "Messages are required",
-      });
-    }
-
-    const history = incomingMessages
+function normalizeHistory(rawMessage) {
+  if (Array.isArray(rawMessage)) {
+    return rawMessage
       .filter(
         (message) =>
+          message &&
           (message.role === "user" ||
             message.role === "assistant") &&
           typeof message.content === "string" &&
@@ -180,236 +16,236 @@ router.post("/chat", async (req, res) => {
       )
       .slice(-10)
       .map((message) => ({
-        role: message.role,
+        role: message.role === "assistant" ? "model" : "user",
         content: message.content.trim(),
       }));
+  }
+
+  const text = String(rawMessage || "").trim();
+
+  return text
+    ? [{ role: "user", content: text }]
+    : [];
+}
+
+function findMatches(items, latestMessage) {
+  const query = latestMessage.toLowerCase();
+
+  const budgetMatch = query.match(
+    /(?:under|below|less than|up to|within)\s*[₹rs.]?\s*(\d+)/i
+  );
+
+  const budget = budgetMatch
+    ? Number(budgetMatch[1])
+    : null;
+
+  const words = query
+    .replace(/[₹,?!.]/g, " ")
+    .split(/\s+/)
+    .filter((word) => word.length >= 3)
+    .filter(
+      (word) =>
+        ![
+          "need",
+          "want",
+          "looking",
+          "lookingfor",
+          "rent",
+          "rental",
+          "please",
+          "under",
+          "below",
+          "less",
+          "than",
+          "per",
+          "day",
+          "days",
+          "something",
+          "find",
+          "show",
+        ].includes(word)
+    );
+
+  const scored = items
+    .map((item) => {
+      const searchable = `
+        ${item.title || ""}
+        ${item.category || ""}
+        ${item.city || ""}
+        ${item.description || ""}
+      `.toLowerCase();
+
+      let score = 0;
+
+      for (const word of words) {
+        if (searchable.includes(word)) {
+          score += 1;
+        }
+      }
+
+      if (budget !== null && Number(item.price_per_day) <= budget) {
+        score += 2;
+      }
+
+      return {
+        ...item,
+        score,
+      };
+    })
+    .filter((item) => {
+      if (budget !== null) {
+        return Number(item.price_per_day) <= budget;
+      }
+
+      return item.score > 0;
+    })
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 3);
+
+  return scored.map(({ score, ...item }) => item);
+}
+
+router.post("/chat", async (req, res) => {
+  try {
+    const history = normalizeHistory(req.body?.message);
+
+    if (history.length === 0) {
+      return res.status(400).json({
+        message: "Message is required",
+      });
+    }
+
+    const inventoryResult = await pool.query(
+      `SELECT
+        id,
+        title,
+        category,
+        city,
+        price_per_day,
+        description,
+        image_url
+       FROM items
+       ORDER BY id DESC
+       LIMIT 20`
+    );
+
+    const inventory = inventoryResult.rows;
 
     const latestUserMessage =
       [...history]
         .reverse()
-        .find(
-          (message) => message.role === "user"
-        )?.content || "";
+        .find((message) => message.role === "user")
+        ?.content || "";
 
-    const inventoryResult = await pool.query(
-  `SELECT id, title, category, city, price_per_day, description, image_url
-   FROM items
-   ORDER BY id DESC
-   LIMIT 20`
-);
+    const matches = findMatches(
+      inventory,
+      latestUserMessage
+    );
 
-    const inventory = inventoryResult.rows;
+    const inventoryContext = inventory
+      .map(
+        (item) =>
+          `#${item.id} ${item.title} | ${
+            item.category || "general"
+          } | ${item.city || "location unavailable"} | ₹${
+            item.price_per_day
+          }/day | ${item.description || ""}`
+      )
+      .join("\n");
 
-    /*
-     * Ground explicit availability questions
-     * against the real PostgreSQL inventory.
-     */
-    if (
-      isAvailabilityQuestion(latestUserMessage)
-    ) {
-      const matches = findMatchingItems(
-        inventory,
-        latestUserMessage
-      );
-
-      /*
-       * IMPORTANT:
-       * If the database has no matching item,
-       * do not ask the AI to answer.
-       */
-      if (matches.length === 0) {
-  return res.json({
-    reply:
-      "I don't see a matching item currently listed on RentMyThing.",
-    matches: [],
-  });
-}
-
-      const verifiedInventory =
-        formatInventory(matches);
-
-      const systemMessage = `
+    const systemPrompt = `
 You are RentMyThing's AI rental assistant.
 
-Have a natural, friendly conversation.
+Your job is to help users discover and understand rentals on RentMyThing.
 
 Rules:
-- Use the conversation history to understand context.
-- Do not repeat the user's sentence unnecessarily.
-- Do not restate information already established.
-- Ask only one follow-up question at a time.
-- Handle short replies naturally.
-- The user can change topics at any time.
-- Keep responses concise and conversational.
-- Never invent products, prices, cities, or availability.
-- ONLY talk about items in the VERIFIED INVENTORY below.
-- Do not mention any item that is not in the VERIFIED INVENTORY.
+- Be conversational, concise, and practical.
+- Only mention rental items that exist in the provided inventory.
+- Never invent listings, prices, cities, availability, owners, or platform features.
+- Help with rental-related questions, booking basics, pricing, categories, and the current marketplace.
+- If the user asks about a rental that does not appear in the inventory, clearly say it is not currently listed.
+- Do not repeat information unnecessarily.
+- Ask at most one useful follow-up question when needed.
 
-VERIFIED INVENTORY:
-${verifiedInventory}
+Current inventory:
+${inventoryContext || "No rentals are currently listed."}
+`.trim();
 
-Actual RentMyThing rental flow:
-1. Explore rental items.
-2. Open an item's details.
-3. Select start and end dates.
-4. Click "Book & Pay".
-5. Complete Razorpay checkout.
-6. Successful payment confirms the booking.
-7. The booking appears in "My Bookings".
+    const contents = [...history];
 
-Do not claim shipping, delivery tracking, tracking numbers,
-confirmation emails, or other features that are not listed above.
-`;
+    contents[0] = {
+      role: "user",
+      content: `${systemPrompt}\n\nUser conversation begins:\n${contents[0].content}`,
+    };
 
-      const baseUrl = (
-        process.env.OLLAMA_BASE_URL ||
-        "http://localhost:11434"
-      ).replace(/\/$/, "");
+    const apiKey = process.env.GEMINI_API_KEY;
+    const model =
+      process.env.GEMINI_MODEL || "gemini-3.8-flash";
 
-      const model =
-        process.env.OLLAMA_MODEL ||
-        "llama3:latest";
-
-      const response = await fetch(
-        `${baseUrl}/api/chat`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            model,
-            stream: false,
-            messages: [
-              {
-                role: "system",
-                content: systemMessage,
-              },
-              ...history,
-            ],
-          }),
-          signal: AbortSignal.timeout(60000),
-        }
-      );
-
-      if (!response.ok) {
-        throw new Error(
-          `Ollama returned ${response.status}`
-        );
-      }
-
-      const data = await response.json();
+    if (!apiKey) {
+      console.warn("GEMINI_API_KEY is not configured.");
 
       return res.json({
-  reply:
-    data.message?.content ||
-    "I couldn't generate a response.",
-  matches: matches.slice(0, 4),
-});
+        reply:
+          inventory.length > 0
+            ? `I can help you search the ${inventory.length} rentals currently listed on RentMyThing. Try asking for a category, city, or budget.`
+            : "There are no rentals listed yet.",
+        matches,
+      });
     }
 
-    /*
-     * Normal conversation:
-     * Give the model the real inventory and
-     * conversation history.
-     */
-    const fullInventory =
-      formatInventory(inventory) ||
-      "No inventory is currently listed.";
-
-    const systemMessage = `
-You are RentMyThing's AI rental assistant.
-
-Have a natural, friendly conversation with the user.
-
-Rules:
-- Use the conversation history to understand context.
-- Do not repeat the user's sentence unnecessarily.
-- Do not restate information already established.
-- Ask only one follow-up question at a time.
-- Do not ask for information the user already gave.
-- Handle short replies such as yes, no, okay, sure, thanks, etc. naturally.
-- The user can change topics at any time.
-- Do not force every message into a rental search.
-- Keep responses concise and conversational.
-- Never invent rental items, prices, cities, availability, or website features.
-- When discussing rentals, ONLY mention items in the VERIFIED INVENTORY.
-- If the requested item is not in the inventory, say it is not currently listed.
-
-VERIFIED INVENTORY:
-${fullInventory}
-
-Actual RentMyThing rental flow:
-1. Explore rental items.
-2. Open an item's details.
-3. Select start and end dates.
-4. Click "Book & Pay".
-5. Complete Razorpay checkout.
-6. Successful payment confirms the booking.
-7. The booking appears in "My Bookings".
-
-Do not claim shipping, delivery tracking, tracking numbers,
-confirmation emails, or other features that are not listed above.
-`;
-
-    const baseUrl = (
-      process.env.OLLAMA_BASE_URL ||
-      "http://localhost:11434"
-    ).replace(/\/$/, "");
-
-    const model =
-      process.env.OLLAMA_MODEL ||
-      "llama3:latest";
-
     const response = await fetch(
-      `${baseUrl}/api/chat`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+        model
+      )}:generateContent`,
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          "x-goog-api-key": apiKey,
         },
         body: JSON.stringify({
-          model,
-          stream: false,
-          messages: [
-            {
-              role: "system",
-              content: systemMessage,
-            },
-            ...history,
-          ],
+          contents: contents.map((message) => ({
+            role: message.role,
+            parts: [
+              {
+                text: message.content,
+              },
+            ],
+          })),
         }),
         signal: AbortSignal.timeout(60000),
       }
     );
 
     if (!response.ok) {
+      const errorText = await response.text();
+
       throw new Error(
-        `Ollama returned ${response.status}`
+        `Gemini API ${response.status}: ${errorText}`
       );
     }
 
     const data = await response.json();
 
-    const relevantMatches = findMatchingItems(
-  inventory,
-  latestUserMessage
-);
+    const reply =
+      data?.candidates?.[0]?.content?.parts
+        ?.map((part) => part.text || "")
+        .join("")
+        .trim() ||
+      "I couldn't generate a response right now.";
 
-return res.json({
-  reply:
-    data.message?.content ||
-    "I couldn't generate a response.",
-  matches: relevantMatches.slice(0, 4),
-});
+    return res.json({
+      reply,
+      matches,
+    });
   } catch (error) {
-    console.error(
-      "AI assistant error:",
-      error
-    );
+    console.error("AI service error:", error);
 
-    res.status(500).json({
-      message: "AI assistant failed",
+    return res.json({
+      reply:
+        "The AI assistant is temporarily unavailable. You can still browse and book rentals normally.",
+      matches: [],
     });
   }
 });
