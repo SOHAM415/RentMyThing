@@ -3066,56 +3066,17 @@ function AI() {
 export default function App() {
   return (
     <Layout>
-
       <Routes>
-
-        <Route
-          path="/"
-          element={<Home />}
-        />
-
-        <Route
-          path="/items"
-          element={<Items />}
-        />
-
-        <Route
-          path="/items/:id"
-          element={<ItemDetails />}
-        />
-
-        <Route
-          path="/login"
-          element={<Auth mode="login" />}
-        />
-
-        <Route
-          path="/register"
-          element={<Auth mode="register" />}
-        />
-
-        <Route
-          path="/bookings/:id"
-          element={<BookingRoom />}
-        />
-
-        <Route
-          path="/bookings"
-          element={<Bookings />}
-        />
-
-        <Route
-          path="/owner"
-          element={<OwnerDashboard />}
-        />
-
-        <Route
-          path="/ai"
-          element={<AI />}
-        />
-
+        <Route path="/" element={<Home />} />
+        <Route path="/items" element={<Items />} />
+        <Route path="/items/:id" element={<ItemDetails />} />
+        <Route path="/login" element={<Auth mode="login" />} />
+        <Route path="/register" element={<Auth mode="register" />} />
+        <Route path="/bookings/:id" element={<BookingRoom />} />
+        <Route path="/bookings" element={<Bookings />} />
+        <Route path="/owner" element={<OwnerDashboard />} />
+        <Route path="/ai" element={<AI />} />
       </Routes>
-
     </Layout>
   );
 }
