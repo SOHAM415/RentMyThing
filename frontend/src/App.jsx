@@ -33,6 +33,8 @@ import {
   createItemReview,
 } from "./api";
 
+const ITEMS_PER_PAGE = 5;
+
 
 /* =========================
    LAYOUT
@@ -637,15 +639,66 @@ function Items() {
   const [items, setItems] = useState([]);
   const [q, setQ] = useState("");
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadMoreError, setLoadMoreError] = useState("");
 
   useEffect(() => {
+    let cancelled = false;
     setLoading(true);
 
-    listItems()
-      .then((d) => setItems(d.items || []))
-      .catch(() => setItems([]))
-      .finally(() => setLoading(false));
+    listItems({ page: 1, limit: ITEMS_PER_PAGE })
+      .then((data) => {
+        if (cancelled) return;
+        const firstPage = Array.isArray(data.items) ? data.items : [];
+        setItems(firstPage);
+        setPage(1);
+        setHasMore(firstPage.length === ITEMS_PER_PAGE);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setItems([]);
+        setHasMore(false);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
+
+  async function loadMoreItems() {
+    if (loadingMore || !hasMore) return;
+
+    const nextPage = page + 1;
+    setLoadingMore(true);
+    setLoadMoreError("");
+
+    try {
+      const data = await listItems({ page: nextPage, limit: ITEMS_PER_PAGE });
+      const nextItems = Array.isArray(data.items) ? data.items : [];
+
+      setItems((currentItems) => {
+        const knownIds = new Set(currentItems.map((item) => item.id));
+        const uniqueNextItems = nextItems.filter((item) => {
+          if (knownIds.has(item.id)) return false;
+          knownIds.add(item.id);
+          return true;
+        });
+        return [...currentItems, ...uniqueNextItems];
+      });
+
+      setPage(nextPage);
+      setHasMore(nextItems.length === ITEMS_PER_PAGE);
+    } catch {
+      setLoadMoreError("Couldn't load more rentals. Please try again.");
+    } finally {
+      setLoadingMore(false);
+    }
+  }
 
   const filtered = items.filter((i) =>
     `${i.title} ${i.description || ""} ${i.category || ""} ${i.city || ""}`
@@ -672,32 +725,56 @@ function Items() {
       {loading ? (
         <p>Loading rentals...</p>
       ) : (
-        <div className="grid">
-          {filtered.map((item) => (
-            <Link
-              className="card"
-              key={item.id}
-              to={`/items/${item.id}`}
-            >
-              {item.image_url ? (
-                <img src={item.image_url} alt={item.title} />
-              ) : (
-                <div className="placeholder">No image</div>
-              )}
+        <>
+          {filtered.length === 0 ? (
+            <p>{items.length === 0 ? "No rentals available yet." : "No rentals match your search."}</p>
+          ) : (
+            <div className="grid">
+              {filtered.map((item) => (
+                <Link
+                  className="card"
+                  key={item.id}
+                  to={`/items/${item.id}`}
+                >
+                  {item.image_url ? (
+                    <img src={item.image_url} alt={item.title} />
+                  ) : (
+                    <div className="placeholder">No image</div>
+                  )}
 
-              <div className="cardBody">
-                <h3>{item.title}</h3>
-                <p>{item.description?.slice(0, 90)}</p>
-                <strong>₹{item.price_per_day}/day</strong>
-              </div>
-            </Link>
-          ))}
-        </div>
+                  <div className="cardBody">
+                    <h3>{item.title}</h3>
+                    <p>{item.description?.slice(0, 90)}</p>
+                    <strong>₹{item.price_per_day}/day</strong>
+                  </div>
+                </Link>
+              ))}
+            </div>
+          )}
+
+          {hasMore && (
+            <div style={{ display: "flex", justifyContent: "center", marginTop: 24 }}>
+              <button
+                type="button"
+                className="primary"
+                onClick={loadMoreItems}
+                disabled={loadingMore}
+              >
+                {loadingMore ? "Loading..." : "Load more rentals"}
+              </button>
+            </div>
+          )}
+
+          {loadMoreError && (
+            <p role="alert" style={{ textAlign: "center", marginTop: 12 }}>
+              {loadMoreError}
+            </p>
+          )}
+        </>
       )}
     </section>
   );
 }
-
 
 /* =========================
    ITEM DETAILS
