@@ -115,7 +115,7 @@ export const verifyPayment = async (payload) =>
 ========================= */
 
 export const askAI = async (messages) =>
-  (await api.post("/ai/chat", { messages })).data;
+  (await api.post("/ai/chat", { message: messages })).data;
 
 export const getItemReviews = async (id) =>
   (await api.get(`/items/${id}/reviews`)).data;
